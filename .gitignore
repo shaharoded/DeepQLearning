@@ -4,54 +4,10 @@ markdown/
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
 
 # Virtual Environments
 venv/
-env/
-ENV/
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
 
 # Training artifacts
-# results/*.png
-# results/*.jpg
-results/*.log
 models/*.pth
-models/*.pt
-models/*.pkl
-
-# Keep directory structure
-!results/.gitkeep
-!models/.gitkeep
-
-# OS
-.DS_Store
-Thumbs.db
+models/*.npz

@@ -47,7 +47,7 @@ def test_agents():
     print("\nTesting agent classes...")
     
     try:
-        from agent import QLearningAgent, DeepQLearningAgent, ImprovedDeepQLearningAgent
+        from src.agent import QLearningAgent, DeepQLearningAgent, ImprovedDeepQLearningAgent
         
         # Test basic instantiation
         agent1 = QLearningAgent(state_dim=100, action_dim=4)
@@ -94,7 +94,7 @@ def test_basic_training():
     
     try:
         import gymnasium as gym
-        from agent import DeepQLearningAgent
+        from src.agent import DeepQLearningAgent
         
         env = gym.make('CartPole-v1')
         

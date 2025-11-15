@@ -11,14 +11,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import deque, namedtuple
 from typing import Tuple, List, Optional, Dict, Any
 import gymnasium as gym
-import random
 
-
-# Experience tuple for replay buffer
-Experience = namedtuple('Experience', ['state', 'action', 'reward', 'next_state', 'done'])
+# Local imports
+from src.utils import ReplayBuffer
+from src.ffnn import QNetwork, DuelingQNetwork
 
 
 class Agent:
@@ -48,7 +46,7 @@ class Agent:
         # Exploration parameters
         self.epsilon = self.config.get('epsilon_start', 1.0)
         self.epsilon_min = self.config.get('epsilon_min', 0.01)
-        self.epsilon_decay = self.config.get('epsilon_decay', 0.995)
+        self.epsilon_decay = self.config.get('epsilon_decay', 0.995)  # Back to exponential
         
         # Training statistics
         self.episode_rewards: List[float] = []
@@ -85,27 +83,37 @@ class Agent:
         """
         raise NotImplementedError("Subclasses must implement update()")
     
-    def train(self, env: gym.Env, num_episodes: int, max_steps: int = 1000,
-              eval_frequency: int = 100, verbose: bool = True,
-              save_q_table_at: Optional[List[int]] = None) -> Dict[str, Any]:
+    def train_agent(self, env: gym.Env, num_episodes: int = None, max_steps: int = 1000,
+                    eval_frequency: int = 100, verbose: bool = True,
+                    save_q_table_at: Optional[List[int]] = None,
+                    target_reward: float = 475.0, target_window: int = 100,
+                    max_episodes: int = 2000) -> Dict[str, Any]:
         """
-        Train the agent in the given environment.
+        Train the agent in the given environment with early stopping.
         
         Args:
             env: Gymnasium environment
-            num_episodes: Number of training episodes
+            num_episodes: DEPRECATED - use max_episodes instead
             max_steps: Maximum steps per episode
             eval_frequency: Evaluate every N episodes
             verbose: Print training progress
             save_q_table_at: List of episode numbers to save Q-table (for QLearningAgent)
+            target_reward: Target average reward for early stopping (default: 475.0)
+            target_window: Window size for computing average (default: 100)
+            max_episodes: Maximum episodes before stopping (default: 2000)
             
         Returns:
             Dictionary containing training metrics
         """
+        # Backward compatibility
+        if num_episodes is not None:
+            max_episodes = num_episodes
+            
         # Store Q-tables
         q_tables_log: Dict[int, np.ndarray] = {}
+        converged = False
         
-        for episode in range(num_episodes):
+        for episode in range(max_episodes):
             state, _ = env.reset()
             episode_reward = 0.0
             episode_loss = 0.0
@@ -144,56 +152,92 @@ class Agent:
                 if hasattr(self, 'q_table'):
                     q_tables_log[episode + 1] = np.copy(self.q_table)
             
+            # Check early stopping criterion
+            if len(self.episode_rewards) >= target_window:
+                avg_reward = np.mean(self.episode_rewards[-target_window:])
+                if avg_reward >= target_reward:
+                    converged = True
+                    if verbose:
+                        print(f"\n{'='*60}")
+                        print(f"EARLY STOPPING: Target achieved!")
+                        print(f"Episode {episode + 1}: {target_window}-episode average = {avg_reward:.2f} ≥ {target_reward}")
+                        print(f"{'='*60}\n")
+                    break
+            
             # Logging
             if verbose and (episode + 1) % eval_frequency == 0:
                 avg_reward = np.mean(self.episode_rewards[-eval_frequency:])
                 avg_length = np.mean(self.episode_lengths[-eval_frequency:])
-                print(f"Episode {episode + 1}/{num_episodes} | "
-                      f"Avg Reward: {avg_reward:.2f} | "
-                      f"Avg Length: {avg_length:.2f} | "
+                print(f"Episode {episode + 1}/{max_episodes} | "
+                      f"Avg Reward (=Length): {avg_reward:.2f} | "
                       f"Epsilon: {self.epsilon:.3f}")
         
         return {
             'rewards': self.episode_rewards,
             'lengths': self.episode_lengths,
             'losses': self.losses,
-            'q_tables': q_tables_log
+            'q_tables': q_tables_log,
+            'converged': converged,
+            'episodes_trained': len(self.episode_rewards)
         }
     
-    def evaluate(self, env: gym.Env, num_episodes: int = 10, 
-                 render: bool = False) -> Tuple[float, float]:
+    def test_agent(self, env: gym.Env, num_episodes: int = 10, 
+                   render: bool = False, max_steps: int = 1000) -> Tuple[float, float]:
         """
-        Evaluate the agent's performance.
+        Test the agent on new episodes with the trained model.
+        
+        This is a general implementation that works for all agents.
+        Can be overridden by subclasses if needed.
         
         Args:
             env: Gymnasium environment
-            num_episodes: Number of evaluation episodes
+            num_episodes: Number of test episodes
             render: Whether to render the environment
+            max_steps: Maximum steps per episode
             
         Returns:
             Tuple of (mean_reward, std_reward)
         """
         rewards = []
+        lengths = []
         
-        for _ in range(num_episodes):
+        print(f"\nTesting agent for {num_episodes} episodes...")
+        
+        for episode in range(num_episodes):
             state, _ = env.reset()
             episode_reward = 0.0
-            done = False
+            steps = 0
             
-            while not done:
+            for step in range(max_steps):
                 if render:
                     env.render()
                 
+                # Use greedy policy (no exploration)
                 action = self.select_action(state, training=False)
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 
                 episode_reward += reward
+                steps += 1
                 state = next_state
+                
+                if done:
+                    break
             
             rewards.append(episode_reward)
+            lengths.append(steps)
+            
+            if render:
+                print(f"Test Episode {episode + 1}: Reward = {episode_reward:.2f}, Steps = {steps}")
         
-        return np.mean(rewards), np.std(rewards)
+        mean_reward = np.mean(rewards)
+        std_reward = np.std(rewards)
+        mean_length = np.mean(lengths)
+        
+        print(f"\nTest Results:")
+        print(f"Mean Reward (= Length): {mean_reward:.2f} ± {std_reward:.2f}")
+        
+        return mean_reward, std_reward
     
     def save(self, filepath: str):
         """Save agent parameters to file."""
@@ -204,7 +248,7 @@ class Agent:
         raise NotImplementedError("Subclasses must implement load()")
     
     def _decay_epsilon(self):
-        """Decay exploration rate."""
+        """Decay exploration rate using exponential decay."""
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
 
@@ -327,105 +371,23 @@ class QLearningAgent(Agent):
         print(f"Q-table loaded from {filepath}")
 
 
-class ReplayBuffer:
-    """
-    Experience replay buffer for DQN agents.
-    
-    Stores transitions and samples random minibatches for training.
-    """
-    
-    def __init__(self, capacity: int):
-        """
-        Initialize replay buffer.
-        
-        Args:
-            capacity: Maximum number of transitions to store
-        """
-        self.buffer = deque(maxlen=capacity)
-    
-    def push(self, state: np.ndarray, action: int, reward: float,
-             next_state: np.ndarray, done: bool):
-        """Add a transition to the buffer."""
-        self.buffer.append(Experience(state, action, reward, next_state, done))
-    
-    def sample(self, batch_size: int) -> Tuple[torch.Tensor, ...]:
-        """
-        Sample a random batch of transitions.
-        
-        Args:
-            batch_size: Number of transitions to sample
-            
-        Returns:
-            Tuple of tensors (states, actions, rewards, next_states, dones)
-        """
-        experiences = random.sample(self.buffer, batch_size)
-        
-        states = torch.FloatTensor(np.array([e.state for e in experiences]))
-        actions = torch.LongTensor([e.action for e in experiences])
-        rewards = torch.FloatTensor([e.reward for e in experiences])
-        next_states = torch.FloatTensor(np.array([e.next_state for e in experiences]))
-        dones = torch.FloatTensor([e.done for e in experiences])
-        
-        return states, actions, rewards, next_states, dones
-    
-    def __len__(self) -> int:
-        """Return current size of buffer."""
-        return len(self.buffer)
-
-
-class QNetwork(nn.Module):
-    """
-    Neural network for Q-value approximation.
-    
-    Simple feedforward network with configurable architecture.
-    """
-    
-    def __init__(self, state_dim: int, action_dim: int, hidden_dims: List[int] = [128, 128]):
-        """
-        Initialize Q-network.
-        
-        Args:
-            state_dim: Dimension of state space
-            action_dim: Number of actions
-            hidden_dims: List of hidden layer dimensions
-        """
-        super(QNetwork, self).__init__()
-        
-        layers = []
-        input_dim = state_dim
-        
-        # Build hidden layers
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU()
-            ])
-            input_dim = hidden_dim
-        
-        # Output layer
-        layers.append(nn.Linear(input_dim, action_dim))
-        
-        self.network = nn.Sequential(*layers)
-    
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through network.
-        
-        Args:
-            state: State tensor
-            
-        Returns:
-            Q-values for all actions
-        """
-        return self.network(state)
-
-
 class DeepQLearningAgent(Agent):
     """
     Deep Q-Network (DQN) agent.
     
-    Uses neural network for Q-value approximation with experience replay
+    Uses neural network for Q-value approximation with experience replay (from a buffer)
     and target network for stable learning.
+    
+    This implementation follows the DQN algorithm:
+    1. Initialize replay buffer and Q-networks
+    2. For each episode:
+        - Select action using epsilon-greedy
+        - Execute action and observe reward and next state
+        - Store transition in replay buffer
+        - Sample minibatch from replay buffer (if the buffer has enough samples)
+        - Compute target Q-values using target network
+        - Update Q-network to minimize loss (using ADAM optimizer and SmoothL1Loss() huber loss criterion)
+        - Periodically update target network with Q-network weights, to stabilize learning (by stabilizing target values).
     """
     
     def __init__(self, state_dim: int, action_dim: int, config: Optional[Dict[str, Any]] = None):
@@ -435,7 +397,15 @@ class DeepQLearningAgent(Agent):
         Args:
             state_dim: Dimension of state space
             action_dim: Number of possible actions
-            config: Configuration dictionary
+            config: Configuration dictionary with keys:
+                - batch_size: Minibatch size for training (default: 64)
+                - buffer_capacity: Replay buffer size (default: 10000)
+                - target_update_freq: Steps between target network updates (default: 100)
+                - hidden_dims: List of hidden layer sizes (default: [128, 128])
+                - learning_rate: Learning rate for optimizer (default: 0.001)
+                - gamma: Discount factor (default: 0.99)
+                - epsilon_start: Initial exploration rate (default: 1.0)
+                - epsilon_min: Minimum exploration rate (default: 0.01)
         """
         super().__init__(state_dim, action_dim, config)
         
@@ -446,9 +416,15 @@ class DeepQLearningAgent(Agent):
         self.hidden_dims = self.config.get('hidden_dims', [128, 128])
         
         # Initialize networks
-        self.q_network = QNetwork(state_dim, action_dim, self.hidden_dims)
-        self.target_network = QNetwork(state_dim, action_dim, self.hidden_dims)
+        self.q_network = QNetwork(state_dim, action_dim, self.hidden_dims) # Updates every training step
+        self.target_network = QNetwork(state_dim, action_dim, self.hidden_dims) # Target network updated less frequently
         self.target_network.load_state_dict(self.q_network.state_dict())
+        
+        # Ensure networks are in correct mode
+        self.q_network.train()  # Training mode
+        self.target_network.eval()  # Eval mode (no gradients needed)
+        
+        print(f"Initialized DQN with {self.q_network.num_hidden_layers} hidden layers: {self.hidden_dims}")
         
         # Optimizer and loss
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=self.learning_rate)
@@ -466,7 +442,7 @@ class DeepQLearningAgent(Agent):
         
         Args:
             state: Current state
-            training: Whether in training mode
+            training: Whether in training mode (enables epsilon-greedy exploration)
             
         Returns:
             Selected action index
@@ -479,12 +455,18 @@ class DeepQLearningAgent(Agent):
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
             q_values = self.q_network(state_tensor)
-            return q_values.argmax(dim=1).item()
+            return q_values.argmax(dim=1).item() # Select action with highest Q-value
     
     def update(self, state: np.ndarray, action: int, reward: float,
                next_state: np.ndarray, done: bool) -> Optional[float]:
         """
         Store transition and perform learning update if buffer is ready.
+        
+        This implements the DQN learning step:
+        1. Store experience in replay buffer
+        2. Sample random minibatch
+        3. Compute target Q-values: r + γ max_a' Q_target(s', a')
+        4. Update Q-network to minimize loss
         
         Args:
             state: Current state
@@ -496,30 +478,37 @@ class DeepQLearningAgent(Agent):
         Returns:
             Loss value if update was performed, None otherwise
         """
-        # Store transition in replay buffer
+        # Store transition in replay buffer (experience_replay)
         self.replay_buffer.push(state, action, reward, next_state, done)
         
         # Only update if buffer has enough samples
         if len(self.replay_buffer) < self.batch_size:
             return None
         
-        # Sample minibatch
+        # Sample minibatch (sample_batch)
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(self.batch_size)
         
-        # Compute current Q-values
+        # Ensure Q-network is in training mode
+        self.q_network.train()
+        
+        # Compute current Q-values Q(s, a)
         current_q_values = self.q_network(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # Compute target Q-values
+        # Compute target Q-values: y = r + γ max_a' Q_target(s', a')
         with torch.no_grad():
             next_q_values = self.target_network(next_states).max(dim=1)[0]
             target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
         
-        # Compute loss
+        # Detach target to prevent gradient flow
+        target_q_values = target_q_values.detach()
+        
+        # Compute loss: L = (Q(s,a) - y)^2
         loss = self.criterion(current_q_values, target_q_values)
         
-        # Optimize
+        # Optimize the Q-network
         self.optimizer.zero_grad()
         loss.backward()
+        
         self.optimizer.step()
         
         # Update target network periodically
@@ -649,75 +638,27 @@ class ImprovedDeepQLearningAgent(DeepQLearningAgent):
             self.target_network.load_state_dict(self.q_network.state_dict())
         
         return loss.item()
-
-
-class DuelingQNetwork(nn.Module):
-    """
-    Dueling Q-Network architecture.
     
-    Separates the representation of state value V(s) and advantage A(s,a):
-    Q(s,a) = V(s) + [A(s,a) - mean(A(s,·))]
-    """
+    def save(self, filepath: str):
+        """Save network parameters to file."""
+        torch.save({
+            'q_network': self.q_network.state_dict(),
+            'target_network': self.target_network.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'training_steps': self.training_steps,
+            'epsilon': self.epsilon
+        }, filepath)
+        print(f"Model saved to {filepath}")
     
-    def __init__(self, state_dim: int, action_dim: int, hidden_dims: List[int] = [128, 128]):
-        """
-        Initialize dueling Q-network.
-        
-        Args:
-            state_dim: Dimension of state space
-            action_dim: Number of actions
-            hidden_dims: List of hidden layer dimensions
-        """
-        super(DuelingQNetwork, self).__init__()
-        
-        # Shared feature layers
-        feature_layers = []
-        input_dim = state_dim
-        
-        for hidden_dim in hidden_dims[:-1]:
-            feature_layers.extend([
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU()
-            ])
-            input_dim = hidden_dim
-        
-        self.feature_layer = nn.Sequential(*feature_layers)
-        
-        # Value stream
-        self.value_stream = nn.Sequential(
-            nn.Linear(input_dim, hidden_dims[-1]),
-            nn.ReLU(),
-            nn.Linear(hidden_dims[-1], 1)
-        )
-        
-        # Advantage stream
-        self.advantage_stream = nn.Sequential(
-            nn.Linear(input_dim, hidden_dims[-1]),
-            nn.ReLU(),
-            nn.Linear(hidden_dims[-1], action_dim)
-        )
-    
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through dueling network.
-        
-        Args:
-            state: State tensor
-            
-        Returns:
-            Q-values for all actions
-        """
-        features = self.feature_layer(state)
-        
-        # Compute value and advantages
-        value = self.value_stream(features)
-        advantages = self.advantage_stream(features)
-        
-        # Combine using dueling architecture formula
-        # Q(s,a) = V(s) + (A(s,a) - mean(A(s,·)))
-        q_values = value + (advantages - advantages.mean(dim=1, keepdim=True))
-        
-        return q_values
+    def load(self, filepath: str):
+        """Load network parameters from file."""
+        checkpoint = torch.load(filepath)
+        self.q_network.load_state_dict(checkpoint['q_network'])
+        self.target_network.load_state_dict(checkpoint['target_network'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.training_steps = checkpoint['training_steps']
+        self.epsilon = checkpoint['epsilon']
+        print(f"Model loaded from {filepath}")
 
 
 if __name__ == "__main__":
@@ -735,16 +676,35 @@ if __name__ == "__main__":
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.n
         
-        agent1 = QLearningAgent(state_dim=100, action_dim=action_dim)
-        print("✓ QLearningAgent initialized")
+        print(f"\nEnvironment: CartPole-v1")
+        print(f"State dimension: {state_dim}")
+        print(f"Action dimension: {action_dim}")
         
-        agent2 = DeepQLearningAgent(state_dim=state_dim, action_dim=action_dim)
-        print("✓ DeepQLearningAgent initialized")
+        agent1 = QLearningAgent(state_dim=100, action_dim=action_dim)
+        print("\n✓ QLearningAgent initialized")
+        
+        # Test with 3 hidden layers
+        config_3_layers = {'hidden_dims': [64, 64, 64]}
+        agent2_3layers = DeepQLearningAgent(state_dim=state_dim, action_dim=action_dim, 
+                                           config=config_3_layers)
+        print("✓ DeepQLearningAgent initialized (3 hidden layers)")
+        
+        # Test with 5 hidden layers
+        config_5_layers = {'hidden_dims': [64, 64, 64, 64, 64]}
+        agent2_5layers = DeepQLearningAgent(state_dim=state_dim, action_dim=action_dim,
+                                           config=config_5_layers)
+        print("✓ DeepQLearningAgent initialized (5 hidden layers)")
         
         agent3 = ImprovedDeepQLearningAgent(state_dim=state_dim, action_dim=action_dim)
         print("✓ ImprovedDeepQLearningAgent initialized")
         
         print("\nAll agents initialized successfully!")
+        print("\nTo train an agent, use:")
+        print("  results = agent.train_agent(env, num_episodes=500)")
+        print("\nTo test an agent, use:")
+        print("  mean_reward, std_reward = agent.test_agent(env, num_episodes=10, render=True)")
         
     except Exception as e:
         print(f"Error during initialization: {e}")
+        import traceback
+        traceback.print_exc()

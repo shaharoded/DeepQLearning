@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional
 import os
 import json
 
-from agent import QLearningAgent, DeepQLearningAgent, ImprovedDeepQLearningAgent
+from src.agent import QLearningAgent, DeepQLearningAgent, ImprovedDeepQLearningAgent
 
 
 def plot_training_results(metrics: Dict[str, List[float]], agent_name: str, save_path: str = None):
