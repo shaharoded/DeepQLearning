@@ -1,94 +1,37 @@
 # Deep Reinforcement Learning - Assignment 1
 
-## Project Overview
-This project implements and compares three different Q-Learning approaches for reinforcement learning tasks:
-- Traditional Q-Learning
-- Deep Q-Learning (DQN)
-- Improved Deep Q-Learning (with enhancements)
+Implementation and comparison of Q-Learning algorithms on discrete and continuous control tasks.
 
-## Requirements
-- Python 3.8+
-- Gymnasium (OpenAI Gym)
-- PyTorch
-- NumPy
-- Matplotlib (for visualization)
+## Overview
 
-## Installation
+This project implements three reinforcement learning agents:
+1. **Q-Learning** - Tabular method for discrete state spaces (FrozenLake-v1)
+2. **Deep Q-Network (DQN)** - Neural network approximation for continuous spaces (CartPole-v1)
+3. **Double DQN** - Improved DQN with reduced overestimation bias and optional priority buffer.
 
-### Quick Setup
-```bash
-# Install all dependencies
-pip install -r requirements.txt
-```
-
-### Manual Installation
-```bash
-pip install gymnasium torch numpy matplotlib
-```
 
 ## Project Structure
 ```
-Assignment1/
-├── agent.py              # Agent base class and implementations
-│   ├── Agent             # Base class with common interface
-│   ├── QLearningAgent    # Tabular Q-Learning
-│   ├── DeepQLearningAgent        # DQN implementation
-│   └── ImprovedDeepQLearningAgent # Enhanced DQN
-├── main.py               # Main training and evaluation scripts
-├── requirements.txt      # Python dependencies
-├── README.md            # This file
-├── results/             # Training plots and logs
-└── models/              # Saved model checkpoints
-```
-
-## Quick Start
-
-### Run the Example
-The easiest way to get started:
-
-```bash
-python main.py
-```
-
-This will train an Improved DQN agent on CartPole-v1 and save results to `results/` and models to `models/`.
-
-### Training an Agent (Custom Code)
-```python
-from agent import DeepQLearningAgent, ImprovedDeepQLearningAgent
-import gymnasium as gym
-
-# Create environment
-env = gym.make('CartPole-v1')
-
-# Configure agent
-config = {
-    'learning_rate': 0.001,
-    'gamma': 0.99,
-    'epsilon_start': 1.0,
-    'epsilon_min': 0.01,
-    'epsilon_decay': 0.995,
-    'batch_size': 64,
-    'buffer_capacity': 10000,
-    'target_update_freq': 10,
-    'hidden_dims': [128, 128]
-}
-
-# Initialize agent
-agent = ImprovedDeepQLearningAgent(
-    state_dim=env.observation_space.shape[0],
-    action_dim=env.action_space.n,
-    config=config
-)
-
-# Train agent
-metrics = agent.train(env, num_episodes=500)
-
-# Evaluate
-mean_reward, std_reward = agent.evaluate(env, num_episodes=20)
-print(f"Performance: {mean_reward:.2f} ± {std_reward:.2f}")
-
-# Save model
-agent.save('models/my_agent.pth')
+Root/
+├── src/
+│   ├── init.py                     # Package initialization
+│   ├── agent.py                    # Agent implementations
+│   │ ├── Agent                     # Base class
+│   │ ├── QLearningAgent            # Tabular Q-Learning
+│   │ ├── DeepQLearningAgent        # Standard DQN
+│   │ └── DoubleDeepQLearningAgent  # Double DQN
+│   ├── ffnn.py                     # Neural network architectures
+│   │ └── QNetwork                  # Feedforward Q-network
+│   └── utils.py                    # Replay buffers and utilities
+│   ├── ReplayBuffer                # Standard uniform replay
+│   └── PrioritizedReplayBuffer     # Priority-based replay
+├── train-test-agents.ipynb         # Main notebook for training and evaluation
+├── results/                        # Training outputs (plots, summaries, policies)
+│   ├── section1/                   # Q-Learning results
+│   ├── section2/                   # DQN results
+│   └── section3/                   # Double DQN results
+├── models/                         # Saved model checkpoints
+└── requirements.txt                # Python dependencies
 ```
 
 ## Agents
@@ -108,6 +51,8 @@ All agents accept a `config` dictionary with hyperparameters like:
 - `learning_rate`: Learning rate for updates
 - `gamma`: Discount factor for future rewards
 - `epsilon_start/min/decay`: Exploration parameters
+
+>> See train-test-agents.ipynb for usage examples.
 
 ### 1. QLearning (Tabular Q-Learning)
 Traditional Q-Learning with tabular representation. Suitable for discrete state spaces.
@@ -131,14 +76,11 @@ Enhanced DQN with modern improvements.
 
 **Key Features:**
 - Double DQN
-- Dueling architecture
 - Prioritized experience replay
-- Noisy networks for exploration
 
 ## Evaluation
 Each agent can be evaluated on:
 - Training performance (reward over episodes)
-- Sample efficiency
 - Final policy performance
 - Convergence stability
 
