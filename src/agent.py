@@ -386,7 +386,7 @@ class DeepQLearningAgent(Agent):
         - Store transition in replay buffer
         - Sample minibatch from replay buffer (if the buffer has enough samples)
         - Compute target Q-values using target network
-        - Update Q-network to minimize loss (using ADAM optimizer and SmoothL1Loss() huber loss criterion)
+        - Update Q-network to minimize loss (using ADAM optimizer and nn.MSE() loss criterion)
         - Periodically update target network with Q-network weights, to stabilize learning (by stabilizing target values).
     """
     
