@@ -16,7 +16,7 @@ import os
 from tqdm import tqdm
 import json
 
-from agent import QLearningAgent
+from src.agent import QLearningAgent
 
 
 def evaluate_agent_performance(agent: QLearningAgent, env: gym.Env, 
